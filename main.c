@@ -2,201 +2,181 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <getopt.h>
 
-typedef double afunc(double);
-
-// Объявления функций
 double f1(double x);
+
 double f2(double x);
+
 double f3(double x);
+
 double df1(double x);
+
 double df2(double x);
+
 double df3(double x);
+
 double test1(double x);
+
 double test2(double x);
+
 double test3(double x);
+
 double dtest1(double x);
+
 double dtest2(double x);
+
 double dtest3(double x);
 
 static long long unsigned iterations;
 
-// Комбинированный метод хорд и касательных
-static double root(afunc *f, afunc *df, afunc *g, afunc *dg, 
-                 double a, double b, double eps) {
+double root(
+    double (*f)(double), double (*df)(double),
+    double (*g)(double), double (*dg)(double),
+    double a, double b,
+    double eps1
+) {
     iterations = 0;
+    double ddf(double x) {
+        double h = sqrt(eps1);
+        return (df(x + h) - df(x - h)) / (2 * h);
+    }
+
+    double ddg(double x) {
+        double h = sqrt(eps1);
+        return (dg(x + h) - dg(x - h)) / (2 * h);
+    }
+
     double fa = f(a) - g(a);
     double fb = f(b) - g(b);
-    
+
     if (fa * fb >= 0) {
-        fprintf(stderr, "Root is not bracketed in [%g, %g] (f(a)=%g, f(b)=%g)\n", 
-               a, b, fa, fb);
+        printf("Error: No root in [%.2f, %.2f] (f(a) and f(b) have the same sign).\n", a, b);
         return NAN;
     }
-    
-    // Определяем направление приближения
-    int is_increasing = (fa < 0);
-    double midpoint = (a + b) / 2;
-    double fmid = f(midpoint) - g(midpoint);
-    double chord_value = (fa + fb) / 2;
-    int is_above_chord = (fmid > chord_value);
-    int same_sign_derivatives = (is_increasing && !is_above_chord) || (!is_increasing && is_above_chord);
-    
-    double x0 = a, x1 = b;
-    double y0 = fa, y1 = fb;
-    
-    while (fabs(x1 - x0) > eps) {
-        iterations++;
-        
+
+    double x_chord, x_tangent;
+    double x_prev = a;
+
+    do {
         // Метод хорд
-        double x_chord = (x0 * y1 - x1 * y0) / (y1 - y0);
-        
-        // Метод касательных
-        double x_newton;
-        if (same_sign_derivatives) {
-            x_newton = x1 - y1 / (df(x1) - dg(x1));
+        x_chord = (a * fb - b * fa) / (fb - fa);
+
+        // Метод Ньютона (касательных)
+        double x0 = ((ddf(a) - ddg(a)) * (df(a) - dg(a))) > 0 ? b : a;
+        x_tangent = x0 - (f(x0) - g(x0)) / (df(x0) - dg(x0));
+
+        // Новое приближение — среднее между хордой и касательной
+        x_prev = (x_chord + x_tangent) / 2;
+
+        // Обновляем границы отрезка
+        double fx = f(x_prev) - g(x_prev);
+        if (fx * fa < 0) {
+            // сохранение знаков
+            b = x_prev;
+            fb = fx;
         } else {
-            x_newton = x0 - y0 / (df(x0) - dg(x0));
+            a = x_prev;
+            fa = fx;
         }
-        
-        // Комбинированный подход
-        if (same_sign_derivatives) {
-            x0 = x_chord;
-            x1 = x_newton;
-        } else {
-            x0 = x_newton;
-            x1 = x_chord;
-        }
-        
-        y0 = f(x0) - g(x0);
-        y1 = f(x1) - g(x1);
-    }
-    
-    return (x0 + x1) / 2;
+        iterations++;
+    } while (fabs(b - a) > eps1);
+
+    return (a + b) / 2;
 }
 
-// Формула Симпсона
-static double integral(afunc *f, double a, double b, double eps) {
-    int n = 10;
+// Функция для вычисления интеграла методом Симпсона с заданной точностью eps2
+double integral(double (*f)(double), double a, double b, double eps2) {
+    int n = 2; // Начальное число разбиений (должно быть чётным)
     double h = (b - a) / n;
-    double sum_odd = 0.0, sum_even = 0.0;
-    
-    for (int i = 1; i < n; i += 2) {
-        sum_odd += f(a + i * h);
-    }
-    
-    for (int i = 2; i < n; i += 2) {
-        sum_even += f(a + i * h);
-    }
-    
-    double I = (f(a) + f(b) + 4 * sum_odd + 2 * sum_even) * h / 3;
-    double I_prev;
-    double error;
-    
-    do {
-        I_prev = I;
+    double prev_sum = 0.0; // Предыдущее значение интеграла
+    double prev_sum2 = 0.0; // Предыдущая сумма четных
+    double prev_sum3 = 0.0; // Предыдущая сумма нечетных
+    double current_sum = 0.0; // Текущее значение интеграла
+    double current_sum2 = 0.0; // Текущая сумма четных членов
+    double current_sum3 = 0.0; // Текущая сумма нечетных элементов
+    double error = eps2 + 1; // Погрешность (инициализируем значением больше eps2)
+
+    // Первое приближение (n = 2)
+    prev_sum2 = 0;
+    prev_sum3 = 4 * f(a + h);
+    prev_sum = (f(a) + prev_sum3 + f(b)) * h / 3;
+
+    // Увеличиваем n в 2 раза на каждой итерации, пока не достигнем нужной точности
+    while (error > eps2) {
+        current_sum2 = prev_sum2 + prev_sum3 / 2.0; // Сохраняем прошлые вычисления
+
         n *= 2;
         h = (b - a) / n;
-        
-        sum_even += sum_odd;
-        sum_odd = 0.0;
-        
+
+        current_sum3 = 0.0;
         for (int i = 1; i < n; i += 2) {
-            sum_odd += f(a + i * h);
+            current_sum3 += 4 * f(a + h * i);
         }
-        
-        I = (f(a) + f(b) + 4 * sum_odd + 2 * sum_even) * h / 3;
-        error = fabs(I - I_prev) / 15;
-    } while (error > eps);
-    
-    return I;
+        current_sum = (f(a) + current_sum2 + current_sum3 + f(b)) * h / 3;
+
+        // Оцениваем погрешность по правилу Рунге (p = 1/15 для Симпсона)
+        error = fabs(current_sum - prev_sum) / 15;
+
+        // Обновляем предыдущее значение для следующей итерации
+        prev_sum = current_sum;
+        prev_sum2 = current_sum2;
+        prev_sum3 = current_sum3;
+    }
+
+    return current_sum;
 }
 
 int main(int argc, char *argv[]) {
-    afunc *f[6] = {f1, f2, f3, test1, test2, test3};
-    afunc *df[6] = {df1, df2, df3, dtest1, dtest2, dtest3};
-    
-    static struct option long_options[] = {
-        {"help", no_argument, 0, 'h'},
-        {"root", no_argument, 0, 'r'},
-        {"iterations", no_argument, 0, 'i'},
-        {"test-root", required_argument, 0, 'R'},
-        {"test-integral", required_argument, 0, 'I'},
-        {0, 0, 0, 0}
-    };
-    
-    int opt;
-    int option_index = 0;
-    
-    while ((opt = getopt_long(argc, argv, "hriR:I:", long_options, &option_index)) != -1) {
-        switch (opt) {
-            case 'h':
-                printf("Available options:\n");
-                printf("  -h, --help           Show this help message\n");
-                printf("  -r, --root           Print roots of intersections\n");
-                printf("  -i, --iterations     Print number of iterations for root finding\n");
-                printf("  -R, --test-root F1:F2:A:B:E:R   Test root function\n");
-                printf("  -I, --test-integral F:A:B:E:R   Test integral function\n");
-                return 0;
-                
-            case 'r':
-                printf("Root f1 and f2: %.6f\n", root(f1, df1, f2, df2, 6, 7, 0.001));
-                printf("Root f1 and f3: %.6f\n", root(f1, df1, f3, df3, 2.1, 3, 0.001));
-                printf("Root f2 and f3: %.6f\n", root(f2, df2, f3, df3, 4, 5, 0.001));
-                return 0;
-                
-            case 'i':
-                iterations = 0;
-                root(f1, df1, f2, df2, 6, 7, 0.001);
-                printf("Iterations f1 and f2: %llu\n", iterations);
-                
-                iterations = 0;
-                root(f1, df1, f3, df3, 2.1, 3, 0.001);
-                printf("Iterations f1 and f3: %llu\n", iterations);
-                
-                iterations = 0;
-                root(f2, df2, f3, df3, 4, 5, 0.001);
-                printf("Iterations f2 and f3: %llu\n", iterations);
-                return 0;
-                
-            case 'R': {
-                int x, y;
-                double a, b, eps, r;
-                sscanf(optarg, "%d:%d:%lf:%lf:%lf:%lf", &x, &y, &a, &b, &eps, &r);
-                x--; y--;
-                double test_root = root(f[x], df[x], f[y], df[y], a, b, eps);
-                printf("%.6f %.6f %.6f\n", test_root, fabs(test_root - r), fabs((test_root - r) / r));
-                return 0;
-            }
-                
-            case 'I': {
-                int x;
-                double a, b, eps, r;
-                sscanf(optarg, "%d:%lf:%lf:%lf:%lf", &x, &a, &b, &eps, &r);
-                x--;
-                double test_integral = integral(f[x], a, b, eps);
-                printf("%.6f %.6f %.6f\n", test_integral, fabs(test_integral - r), fabs((test_integral - r) / r));
-                return 0;
-            }
-                
-            default:
-                fprintf(stderr, "Unknown option\n");
-                return 1;
+    double (*f[6])(double) = {f1, f2, f3, test1, test2, test3};
+    double (*df[6])(double) = {df1, df2, df3, dtest1, dtest2, dtest3};
+    if (argc > 1) {
+        if ((strcmp(argv[1], "-h") == 0) || (strcmp(argv[1], "--help") == 0)) {
+            printf("--help\n");
+            printf("-h\n");
+            printf("--root\n");
+            printf("-r\n");
+            printf("--iterations\n");
+            printf("-i\n");
+            printf("--test-root\n");
+            printf("-R\n");
+            printf("--test-integral\n");
+            printf("-I\n");
+        } else if ((strcmp(argv[1], "-r") == 0) || (strcmp(argv[1], "--root") == 0)) {
+            printf("%lf\n", root(f1, df1, f2, df2, 6, 7, 0.001));
+            printf("%lf\n", root(f1, df1, f3, df3, 2.001, 3, 0.001));
+            printf("%lf\n", root(f3, df3, f2, df2, 4, 5, 0.001));
+        } else if ((strcmp(argv[1], "-i") == 0) || (strcmp(argv[1], "--iterations") == 0)) {
+            long long unsigned counter = 0;
+            root(f1, df1, f2, df2, 6, 7, 0.001);
+            counter += iterations;
+            root(f1, df1, f3, df3, 2.001, 3, 0.001);
+            counter += iterations;
+            root(f2, df2, f3, df3, 4, 5, 0.001);
+            counter += iterations;
+            printf("%llu\n", counter);
+        } else if ((strcmp(argv[1], "-R") == 0) || (strcmp(argv[1], "--test-root") == 0)) {
+            int x, y;
+            double a, b, eps, r;
+            sscanf(argv[2], "%d:%d:%lf:%lf:%lf:%lf", &x, &y, &a, &b, &eps, &r);
+            x--;
+            y--;
+            double test_root = root(f[x], df[x], f[y], df[y], a, b, eps);
+            printf("%lf %lf %lf\n", test_root, fabs(test_root - r), fabs((test_root - r) / r));
+        } else if ((strcmp(argv[1], "-I") == 0) || (strcmp(argv[1], "--test-integral") == 0)) {
+            int x;
+            double a, b, eps, r;
+            sscanf(argv[2], "%d:%lf:%lf:%lf:%lf", &x, &a, &b, &eps, &r);
+            x--;
+            double test_integral = integral(f[x], a, b, eps);
+            printf("%lf %lf %lf\n", test_integral, fabs(test_integral - r), fabs((test_integral - r) / r));
         }
+    } else {
+        double r12 = root(f1, df1, f2, df2, 6, 7, 0.001);
+        double r13 = root(f1, df1, f3, df3, 2.001, 3, 0.001);
+        double r23 = root(f2, df2, f3, df3, 4, 5, 0.001);
+        double i1 = integral(f3, r13, r23, 0.001);
+        double i2 = integral(f2, r23, r12, 0.001);
+        double i3 = integral(f1, r13, r12, 0.001);
+        printf("%lf\n", i1 + i2 - i3);
     }
-    
-    // Основной расчет
-    double r1 = root(f1, df1, f2, df2, 6, 7, 0.001);        // ln(x) = -2x + 14
-    double r2 = root(f1, df1, f3, df3, 2.1, 3, 0.001);        // ln(x) = 1/(2-x) + 6
-    double r3 = root(f2, df2, f3, df3, 4, 5, 0.001);        // -2x + 14 = 1/(2-x) + 6
-        
-    // Вычисление площади (правильный порядок!)
-    double area1 = integral(f2, r3, r1, 0.001) - integral(f1, r3, r1, 0.001); // f2 сверху
-    double area2 = integral(f3, r2, r3, 0.001) - integral(f1, r2, r3, 0.001); // f3 сверху
-    double total_area = area1 + area2;
-    
-    printf("Total area: %.6f\n", total_area);
-    
-    return 0;
 }
